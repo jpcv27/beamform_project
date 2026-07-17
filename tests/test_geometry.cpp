@@ -1,0 +1,85 @@
+#include "beamformer/config.hpp"
+#include "beamformer/geometry.hpp"
+
+#include <cassert>
+#include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <stdexcept>
+
+int main() {
+    using namespace beamformer;
+
+    const auto positions_32 = default_positions(32);
+    assert(positions_32.size() == 32);
+    assert((positions_32[0] == Vec3{0.0F, 0.0F, 0.0F}));
+    assert((positions_32[7] == Vec3{7.0F, 0.0F, 0.0F}));
+    assert((positions_32[8] == Vec3{0.0F, 1.0F, 0.0F}));
+    assert((positions_32[31] == Vec3{7.0F, 3.0F, 0.0F}));
+
+    const auto positions_64 = default_positions(64, 0.5F);
+    assert(positions_64.size() == 64);
+    assert((positions_64[63] == Vec3{3.5F, 3.5F, 0.0F}));
+
+    const auto frequencies = constant_frequencies();
+    assert(frequencies.size() == default_frequency_channels);
+    assert(frequencies.front() == default_frequency_hz);
+    assert(frequencies.back() == default_frequency_hz);
+
+    const auto beams_1 = default_beam_grid(1);
+    assert(beams_1.size() == 1);
+    assert(beams_1[0][0] == 0.0F);
+    assert(beams_1[0][1] == 0.0F);
+    assert(beams_1[0][2] == 1.0F);
+
+    const auto beams_5 = default_beam_grid(5);
+    assert(beams_5[0][0] == -0.04F);
+    assert(beams_5[2][0] == 0.0F);
+    assert(beams_5[4][0] == 0.04F);
+
+    const auto beams_10 = default_beam_grid(10);
+    assert(beams_10[7][0] == 0.04F);
+    for (const auto& direction : beams_10) {
+        const float norm = std::sqrt(direction[0] * direction[0]
+                                     + direction[1] * direction[1]
+                                     + direction[2] * direction[2]);
+        assert(std::abs(norm - 1.0F) < 1.0e-6F);
+    }
+
+    const auto temp_dir = std::filesystem::temp_directory_path();
+    const auto positions_path = temp_dir / "beamformer_poc_positions_test.txt";
+    const auto frequencies_path = temp_dir / "beamformer_poc_frequencies_test.txt";
+
+    {
+        std::ofstream output(positions_path);
+        output << "# x, y, z in metres\n";
+        output << "1.0, 2.0, 3.0\n";
+        output << "4.0 5.0 6.0\n";
+    }
+    {
+        std::ofstream output(frequencies_path);
+        output << "# Hz\n";
+        output << "400000000\n";
+        output << "401000000\n";
+    }
+
+    const auto loaded_positions = load_positions(positions_path, 2);
+    const auto loaded_frequencies = load_frequencies(frequencies_path, 2);
+    assert((loaded_positions[0] == Vec3{1.0F, 2.0F, 3.0F}));
+    assert((loaded_positions[1] == Vec3{4.0F, 5.0F, 6.0F}));
+    assert(loaded_frequencies[0] == 400'000'000.0F);
+    assert(loaded_frequencies[1] == 401'000'000.0F);
+
+    std::filesystem::remove(positions_path);
+    std::filesystem::remove(frequencies_path);
+
+    bool invalid_geometry_rejected = false;
+    try {
+        static_cast<void>(default_positions(48));
+    } catch (const std::invalid_argument&) {
+        invalid_geometry_rejected = true;
+    }
+    assert(invalid_geometry_rejected);
+
+    return 0;
+}

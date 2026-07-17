@@ -1,0 +1,53 @@
+cmake_minimum_required(VERSION 3.24)
+
+project(charts_voltage_beamformer_poc LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+option(BEAMFORMER_ENABLE_CUDA "Enable CUDA targets when a CUDA compiler is available" ON)
+
+set(BEAMFORMER_HAS_CUDA OFF)
+if(BEAMFORMER_ENABLE_CUDA)
+    include(CheckLanguage)
+    check_language(CUDA)
+    if(CMAKE_CUDA_COMPILER)
+        enable_language(CUDA)
+        set(CMAKE_CUDA_STANDARD 17)
+        set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+        set(BEAMFORMER_HAS_CUDA ON)
+        message(STATUS "CUDA support enabled: ${CMAKE_CUDA_COMPILER}")
+    else()
+        message(WARNING "CUDA compiler not found; building the CPU-only foundation")
+    endif()
+endif()
+
+add_library(beamformer_core
+    src/geometry.cpp
+    src/synthetic_data.cpp
+)
+target_include_directories(beamformer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_definitions(beamformer_core PUBLIC BEAMFORMER_HAS_CUDA=$<BOOL:${BEAMFORMER_HAS_CUDA}>)
+target_compile_options(beamformer_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall;-Wextra;-Wpedantic>)
+
+add_executable(generate_fake_data tools/generate_fake_data.cpp)
+target_link_libraries(generate_fake_data PRIVATE beamformer_core)
+
+include(CTest)
+if(BUILD_TESTING)
+    add_executable(test_contract tests/test_contract.cpp)
+    target_link_libraries(test_contract PRIVATE beamformer_core)
+    target_compile_options(test_contract PRIVATE -UNDEBUG)
+    add_test(NAME contract COMMAND test_contract)
+
+    add_executable(test_geometry tests/test_geometry.cpp)
+    target_link_libraries(test_geometry PRIVATE beamformer_core)
+    target_compile_options(test_geometry PRIVATE -UNDEBUG)
+    add_test(NAME geometry COMMAND test_geometry)
+
+    add_executable(test_synthetic_data tests/test_synthetic_data.cpp)
+    target_link_libraries(test_synthetic_data PRIVATE beamformer_core)
+    target_compile_options(test_synthetic_data PRIVATE -UNDEBUG)
+    add_test(NAME synthetic_data COMMAND test_synthetic_data)
+endif()

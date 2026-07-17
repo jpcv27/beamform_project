@@ -1,0 +1,5 @@
+/build/
+/.venv/
+/results/*.bin
+/results/*.csv
+/results/*.png
