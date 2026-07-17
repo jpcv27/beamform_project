@@ -7,24 +7,34 @@
 #include <fstream>
 #include <stdexcept>
 
+namespace {
+
+bool close(const float actual, const float expected) {
+    return std::abs(actual - expected) < 1.0e-6F;
+}
+
+} // namespace
+
 int main() {
     using namespace beamformer;
 
     const auto positions_32 = default_positions(32);
     assert(positions_32.size() == 32);
     assert((positions_32[0] == Vec3{0.0F, 0.0F, 0.0F}));
-    assert((positions_32[7] == Vec3{7.0F, 0.0F, 0.0F}));
-    assert((positions_32[8] == Vec3{0.0F, 1.0F, 0.0F}));
-    assert((positions_32[31] == Vec3{7.0F, 3.0F, 0.0F}));
+    assert(close(positions_32[7][0], 4.2F));
+    assert(close(positions_32[8][1], 0.6F));
+    assert(close(positions_32[31][0], 4.2F));
+    assert(close(positions_32[31][1], 1.8F));
 
     const auto positions_64 = default_positions(64, 0.5F);
     assert(positions_64.size() == 64);
     assert((positions_64[63] == Vec3{3.5F, 3.5F, 0.0F}));
 
-    const auto frequencies = constant_frequencies();
+    const auto frequencies = channelized_frequencies();
     assert(frequencies.size() == default_frequency_channels);
-    assert(frequencies.front() == default_frequency_hz);
-    assert(frequencies.back() == default_frequency_hz);
+    assert(frequencies.front() == 300'000'000.0F);
+    assert(frequencies[1] == 300'300'000.0F);
+    assert(frequencies.back() == 501'300'000.0F);
 
     const auto beams_1 = default_beam_grid(1);
     assert(beams_1.size() == 1);
@@ -45,6 +55,19 @@ int main() {
                                      + direction[2] * direction[2]);
         assert(std::abs(norm - 1.0F) < 1.0e-6F);
     }
+
+    const auto beams_32 = rectangular_beam_grid(32);
+    assert(beams_32.size() == 32);
+    assert(beams_32.front()[0] < 0.0F && beams_32.front()[1] < 0.0F);
+    assert(beams_32.back()[0] > 0.0F && beams_32.back()[1] > 0.0F);
+    for (const auto& direction : beams_32) {
+        const float norm = std::sqrt(direction[0] * direction[0]
+                                     + direction[1] * direction[1]
+                                     + direction[2] * direction[2]);
+        assert(std::abs(norm - 1.0F) < 1.0e-6F);
+    }
+    const auto beams_64 = rectangular_beam_grid(64);
+    assert(beams_64.size() == 64);
 
     const auto temp_dir = std::filesystem::temp_directory_path();
     const auto positions_path = temp_dir / "beamformer_poc_positions_test.txt";

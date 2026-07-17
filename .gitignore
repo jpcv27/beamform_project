@@ -1,5 +1,7 @@
 /build/
 /.venv/
+__pycache__/
+*.py[cod]
 /results/*.bin
 /results/*.csv
 /results/*.png

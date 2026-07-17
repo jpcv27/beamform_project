@@ -2,6 +2,7 @@
 #include "beamformer/geometry.hpp"
 #include "beamformer/indexing.hpp"
 #include "beamformer/int4.hpp"
+#include "beamformer/io.hpp"
 #include "beamformer/synthetic_data.hpp"
 
 #include <algorithm>
@@ -46,7 +47,7 @@ int main() {
     }
 
     const auto positions = default_positions(dims.n_ant);
-    const auto frequencies = constant_frequencies(dims.n_freq);
+    const auto frequencies = channelized_frequencies(dims.n_freq);
     const auto broadside =
         make_point_source(dims, positions, frequencies, direction_from_lm(0.0F, 0.0F));
     const auto broadside_value = pack_complex_int4(4, 0);

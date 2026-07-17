@@ -2,18 +2,15 @@
 
 #include "beamformer/formats.hpp"
 #include "beamformer/indexing.hpp"
+#include "beamformer/physics.hpp"
 
 #include <algorithm>
 #include <cmath>
-#include <fstream>
 #include <random>
 #include <stdexcept>
 
 namespace beamformer {
 namespace {
-
-constexpr double speed_of_light_m_per_s = 299'792'458.0;
-constexpr double two_pi = 6.283185307179586476925286766559;
 
 void validate_point_source_inputs(const Dimensions& dims,
                                   const std::vector<Vec3>& positions_m,
@@ -119,25 +116,6 @@ PackedVoltage make_noise(const Dimensions& dims, const std::uint32_t seed) {
         packed = pack_complex_int4(real, imag);
     }
     return voltage;
-}
-
-void write_packed_voltage(const std::filesystem::path& path,
-                          const PackedVoltage& voltage,
-                          const Dimensions& dims) {
-    validate_dimensions(dims);
-    if (voltage.size() != packed_voltage_bytes(dims)) {
-        throw std::invalid_argument("packed voltage size does not match dimensions");
-    }
-
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    if (!output) {
-        throw std::runtime_error("cannot open output file: " + path.string());
-    }
-    output.write(reinterpret_cast<const char*>(voltage.data()),
-                 static_cast<std::streamsize>(voltage.size()));
-    if (!output) {
-        throw std::runtime_error("failed to write packed voltage file: " + path.string());
-    }
 }
 
 } // namespace beamformer

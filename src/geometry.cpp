@@ -1,5 +1,7 @@
 #include "beamformer/geometry.hpp"
 
+#include "beamformer/physics.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -67,6 +69,24 @@ std::vector<float> constant_frequencies(const std::size_t n_freq, const float fr
     return std::vector<float>(n_freq, frequency_hz);
 }
 
+std::vector<float> channelized_frequencies(const std::size_t n_freq,
+                                           const float start_hz,
+                                           const float channel_width_hz) {
+    if (n_freq == 0) {
+        throw std::invalid_argument("frequency count must be positive");
+    }
+    if (!std::isfinite(start_hz) || start_hz <= 0.0F
+        || !std::isfinite(channel_width_hz) || channel_width_hz <= 0.0F) {
+        throw std::invalid_argument("frequency start and channel width must be positive");
+    }
+    std::vector<float> frequencies(n_freq);
+    for (std::size_t channel = 0; channel < n_freq; ++channel) {
+        frequencies[channel] =
+            start_hz + static_cast<float>(channel) * channel_width_hz;
+    }
+    return frequencies;
+}
+
 Vec3 direction_from_lm(const float l, const float m) {
     if (!std::isfinite(l) || !std::isfinite(m)) {
         throw std::invalid_argument("direction cosines l and m must be finite");
@@ -93,6 +113,44 @@ std::vector<Vec3> default_beam_grid(const std::size_t n_beams, const float l_ste
     for (std::size_t beam = 0; beam < n_beams; ++beam) {
         const auto offset = static_cast<long long>(beam) - center;
         directions.push_back(direction_from_lm(static_cast<float>(offset) * l_step, m));
+    }
+    return directions;
+}
+
+std::vector<Vec3> rectangular_beam_grid(const std::size_t n_ant,
+                                        const float spacing_m,
+                                        const float design_frequency_hz) {
+    if (spacing_m <= 0.0F || !std::isfinite(spacing_m)) {
+        throw std::invalid_argument("antenna spacing must be positive and finite");
+    }
+    if (design_frequency_hz <= 0.0F || !std::isfinite(design_frequency_hz)) {
+        throw std::invalid_argument("beam-grid design frequency must be positive and finite");
+    }
+
+    const std::size_t rows = n_ant == 32 ? 4 : n_ant == 64 ? 8 : 0;
+    const std::size_t columns = n_ant == 32 || n_ant == 64 ? 8 : 0;
+    if (rows == 0) {
+        throw std::invalid_argument("rectangular beam grid is available only for 32 or 64 beams");
+    }
+
+    const double wavelength_m = speed_of_light_m_per_s
+                                / static_cast<double>(design_frequency_hz);
+    const double aperture_x_m = static_cast<double>(columns - 1) * spacing_m;
+    const double aperture_y_m = static_cast<double>(rows - 1) * spacing_m;
+    const double delta_l = wavelength_m / aperture_x_m;
+    const double delta_m = wavelength_m / aperture_y_m;
+
+    std::vector<Vec3> directions;
+    directions.reserve(n_ant);
+    for (std::size_t row = 0; row < rows; ++row) {
+        const double m = (static_cast<double>(row)
+                          - static_cast<double>(rows - 1) / 2.0) * delta_m;
+        for (std::size_t column = 0; column < columns; ++column) {
+            const double l = (static_cast<double>(column)
+                              - static_cast<double>(columns - 1) / 2.0) * delta_l;
+            directions.push_back(direction_from_lm(static_cast<float>(l),
+                                                   static_cast<float>(m)));
+        }
     }
     return directions;
 }

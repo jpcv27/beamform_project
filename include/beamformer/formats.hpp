@@ -1,10 +1,18 @@
 #pragma once
 
 #include "beamformer/config.hpp"
+#include "beamformer/complex.hpp"
 
 #include <cstddef>
+#include <cstdint>
+#include <vector>
 
 namespace beamformer {
+
+using PackedVoltage = std::vector<std::uint8_t>;
+using ComplexVoltage = std::vector<ComplexFloat>;
+using Weights = std::vector<ComplexFloat>;
+using Intensities = std::vector<float>;
 
 constexpr std::size_t voltage_sample_count(const Dimensions& dims) {
     return dims.n_time * dims.n_freq * dims.n_ant;

@@ -1,6 +1,7 @@
 #include "beamformer/config.hpp"
 #include "beamformer/geometry.hpp"
 #include "beamformer/int4.hpp"
+#include "beamformer/io.hpp"
 #include "beamformer/synthetic_data.hpp"
 
 #include <cstddef>
@@ -28,8 +29,8 @@ struct Options {
     std::int8_t value_real = 3;
     std::int8_t value_imag = -2;
     std::uint32_t seed = 1;
-    float spacing_m = 1.0F;
-    float frequency_hz = beamformer::default_frequency_hz;
+    float spacing_m = beamformer::default_spacing_m;
+    std::optional<float> frequency_hz;
     float source_l = 0.04F;
     float source_m = 0.0F;
     float amplitude = 4.0F;
@@ -54,8 +55,9 @@ void print_usage(const char* program) {
         << "\n"
         << "Point-source options:\n"
         << "  --source-l L --source-m M --amplitude A\n"
-        << "  --spacing-m M           default geometry spacing: 1 m\n"
-        << "  --frequency-hz HZ       default for all 672 channels: 400 MHz\n"
+        << "  --spacing-m M           default geometry spacing: 0.6 m\n"
+        << "  --frequency-hz HZ       optional constant-frequency override\n"
+        << "                          default centers: 300 + 0.3*channel MHz\n"
         << "  --positions FILE        optional x,y,z rows indexed by output element\n"
         << "  --frequencies FILE      optional one-Hz-value-per-line override\n";
 }
@@ -156,10 +158,13 @@ beamformer::PackedVoltage generate(const Options& options,
         const auto positions = options.positions_file
                                    ? beamformer::load_positions(*options.positions_file, dims.n_ant)
                                    : beamformer::default_positions(dims.n_ant, options.spacing_m);
-        const auto frequencies =
-            options.frequencies_file
-                ? beamformer::load_frequencies(*options.frequencies_file, dims.n_freq)
-                : beamformer::constant_frequencies(dims.n_freq, options.frequency_hz);
+        const auto frequencies = options.frequencies_file
+                                     ? beamformer::load_frequencies(
+                                           *options.frequencies_file, dims.n_freq)
+                                 : options.frequency_hz
+                                     ? beamformer::constant_frequencies(
+                                           dims.n_freq, *options.frequency_hz)
+                                     : beamformer::channelized_frequencies(dims.n_freq);
         const auto direction =
             beamformer::direction_from_lm(options.source_l, options.source_m);
         return beamformer::make_point_source(dims, positions, frequencies, direction,
