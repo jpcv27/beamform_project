@@ -82,4 +82,15 @@ if(BUILD_TESTING)
     target_link_libraries(test_cpu_beamformer PRIVATE beamformer_core)
     target_compile_options(test_cpu_beamformer PRIVATE -UNDEBUG)
     add_test(NAME cpu_beamformer COMMAND test_cpu_beamformer)
+
+    if(BEAMFORMER_HAS_CUDA)
+        add_executable(test_cuda_point_source tests/test_cuda_point_source.cpp)
+        target_link_libraries(test_cuda_point_source PRIVATE beamformer_cuda_core)
+        target_compile_options(test_cuda_point_source PRIVATE -UNDEBUG)
+        add_test(NAME cuda_point_source COMMAND test_cuda_point_source)
+        set_tests_properties(cuda_point_source PROPERTIES
+            LABELS "cuda;physics"
+            TIMEOUT 60
+        )
+    endif()
 endif()

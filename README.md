@@ -43,6 +43,37 @@ cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
+When CUDA is enabled, CTest also runs a physical point-source check with a static 32-beam
+rectangular grid, 32 antennas, all 672 channels, and `n_time=1,2,3,4`. A source is placed
+exactly at non-central beam 12. The test requires the frequency- and time-integrated CPU
+and GPU maxima, as well as every per-time maximum, to recover beam 12; it also checks all
+CPU/GPU intensities with `atol=1e-3`, `rtol=1e-5`.
+
+On the tested RTX 4090, all four time sizes recovered beam 12 on both backends. The
+integrated target-to-runner-up power ratio was `19.182` and the maximum absolute CPU/GPU
+error was `0.00390625`, with no output outside the combined tolerance.
+
+```bash
+ctest --test-dir build -R cuda_point_source --output-on-failure -V
+```
+
+The graphical realization uses `T=4` and the exact beam-12 direction
+`(l,m)=(0.089223945833,-0.208189206944)`. After generating the common packed voltage and
+weight files and running both backends, reproduce both dashboards with:
+
+```bash
+conda run -n kotekan_test python tools/plot_results.py \
+    --input results/point_source_32beam_cpu_intensity.bin --label CPU \
+    --compare results/point_source_32beam_cuda_intensity.bin --compare-label CUDA \
+    --n-time 4 --n-freq 672 --n-ant 32 --n-beams 32 \
+    --synthetic-type point-source \
+    --source-l 0.089223945833 --source-m -0.208189206944 --amplitude 4 \
+    --abs-tolerance 0.001 --rel-tolerance 0.00001 \
+    --output results/cpu_cuda_point_source_32beam_validation.png \
+    --comparison-output results/cpu_cuda_point_source_32beam_comparison.png \
+    --summary-json results/cpu_cuda_point_source_32beam_metrics.json
+```
+
 When a CUDA compiler is found, CMake builds `beamformer_cuda`; otherwise the CPU-only
 targets remain available. `CMAKE_CUDA_ARCHITECTURES=89` can replace `native` for the
 tested RTX 4090. The CPU code remains serial as a transparent numerical reference.
@@ -171,7 +202,10 @@ gain assumes uniform weights with fixed total power, so the coherent array contr
 The current generated artifacts are:
 
 - `results/beam_grid_32_full_sky.png`;
-- `results/cpu_32beam_point_source_validation.png`.
+- `results/cpu_32beam_point_source_validation.png`;
+- `results/cpu_cuda_point_source_32beam_validation.png`;
+- `results/cpu_cuda_point_source_32beam_comparison.png`;
+- `results/cpu_cuda_point_source_32beam_metrics.json`.
 
 Use the same script for numerical and graphical CPU/CUDA comparison:
 
