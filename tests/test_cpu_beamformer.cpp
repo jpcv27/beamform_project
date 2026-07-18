@@ -48,6 +48,13 @@ int main() {
         }
     }
 
+    ComplexVoltage extended_voltage = unpack_voltage(packed_one_hot, dims);
+    extended_voltage.push_back({99.0F, 99.0F});
+    Intensities preallocated(one_hot.size() + 1, -1.0F);
+    cpu_beamform_intensity_into(extended_voltage, weights, dims, preallocated);
+    assert(std::equal(one_hot.begin(), one_hot.end(), preallocated.begin()));
+    assert(preallocated.back() == -1.0F);
+
     const Dimensions broadside_dims{1, default_frequency_channels, 32, 1};
     const auto broadside_weights = generate_weights(
         broadside_dims, positions, frequencies,

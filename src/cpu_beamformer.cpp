@@ -32,11 +32,27 @@ Intensities cpu_beamform_intensity(const ComplexVoltage& voltage,
     if (voltage.size() != voltage_sample_count(dims)) {
         throw std::invalid_argument("voltage count does not match dimensions");
     }
+    Intensities intensity(dims.n_time * dims.n_freq * dims.n_beams);
+    cpu_beamform_intensity_into(voltage, weights, dims, intensity);
+    return intensity;
+}
+
+void cpu_beamform_intensity_into(const ComplexVoltage& voltage,
+                                 const Weights& weights,
+                                 const Dimensions& dims,
+                                 Intensities& intensity) {
+    validate_dimensions(dims);
+    if (voltage.size() < voltage_sample_count(dims)) {
+        throw std::invalid_argument("voltage count is smaller than dimensions");
+    }
     if (weights.size() != dims.n_beams * dims.n_freq * dims.n_ant) {
         throw std::invalid_argument("weight count does not match dimensions");
     }
+    const std::size_t required_output = dims.n_time * dims.n_freq * dims.n_beams;
+    if (intensity.size() < required_output) {
+        throw std::invalid_argument("intensity output is smaller than dimensions");
+    }
 
-    Intensities intensity(dims.n_time * dims.n_freq * dims.n_beams);
     for (std::size_t time = 0; time < dims.n_time; ++time) {
         for (std::size_t frequency = 0; frequency < dims.n_freq; ++frequency) {
             for (std::size_t beam = 0; beam < dims.n_beams; ++beam) {
@@ -55,7 +71,6 @@ Intensities cpu_beamform_intensity(const ComplexVoltage& voltage,
             }
         }
     }
-    return intensity;
 }
 
 } // namespace beamformer

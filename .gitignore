@@ -5,3 +5,4 @@ __pycache__/
 /results/*.bin
 /results/*.csv
 /results/*.png
+/results/*.json

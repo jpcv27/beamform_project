@@ -31,7 +31,7 @@ void print_usage(const char* program) {
     std::cout
         << "Usage: " << program << " --output FILE [options]\n\n"
         << "  --n-ant N               32 or 64; default: 64\n"
-        << "  --n-beams N             1 to 10, or equal to n-ant; default: 5\n"
+        << "  --n-beams N             1 to n-ant; default: 5\n"
         << "  --spacing-m M           default geometry spacing: 0.6 m\n"
         << "  --frequency-hz HZ       optional constant-frequency override\n"
         << "                          default centers: 300 + 0.3*channel MHz\n"

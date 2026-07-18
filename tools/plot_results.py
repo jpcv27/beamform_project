@@ -53,8 +53,8 @@ def default_positions(n_ant: int, spacing_m: float = DEFAULT_SPACING_M) -> np.nd
 
 def default_beam_directions(n_beams: int, l_step: float = 0.02,
                             m: float = 0.0) -> np.ndarray:
-    if not 1 <= n_beams <= 10:
-        raise ValueError("n_beams must be between 1 and 10")
+    if not 1 <= n_beams <= 64:
+        raise ValueError("n_beams must be between 1 and 64")
     center = n_beams // 2
     directions = []
     for beam in range(n_beams):
@@ -689,9 +689,9 @@ def build_parser() -> argparse.ArgumentParser:
 def validate_args(args: argparse.Namespace) -> None:
     if args.n_time <= 0 or args.n_freq != DEFAULT_N_FREQ:
         raise ValueError("n_time must be positive and this PoC requires n_freq=672")
-    valid_beam_count = 1 <= args.n_beams <= 10 or args.n_beams == args.n_ant
+    valid_beam_count = 1 <= args.n_beams <= args.n_ant
     if args.n_ant not in (32, 64) or not valid_beam_count:
-        raise ValueError("n_ant must be 32 or 64; n_beams must be 1-10 or equal n_ant")
+        raise ValueError("n_ant must be 32 or 64; n_beams must be 1 to n_ant")
     if args.spacing_m <= 0.0 or args.frequency_start_hz <= 0.0 \
             or args.channel_width_hz <= 0.0 or args.design_frequency_hz <= 0.0:
         raise ValueError("spacing and frequency parameters must be positive")

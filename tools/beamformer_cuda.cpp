@@ -1,5 +1,6 @@
 #include "beamformer/config.hpp"
 #include "beamformer/cpu_beamformer.hpp"
+#include "beamformer/cuda_beamformer.hpp"
 #include "beamformer/io.hpp"
 
 #include <algorithm>
@@ -139,7 +140,7 @@ void append_metrics(const std::filesystem::path& path,
                   "host_to_device_ms,compute_ms,device_to_host_ms,write_ms,total_ms,"
                   "output_elements_per_second,complex_gmac_per_second\n";
     }
-    output << std::fixed << std::setprecision(6) << "cpu," << dims.n_time << ','
+    output << std::fixed << std::setprecision(6) << "cuda," << dims.n_time << ','
            << dims.n_freq << ',' << dims.n_ant << ',' << dims.n_beams << ','
            << timings.load_ms << ',' << timings.unpack_ms << ',' << timings.setup_ms
            << ',' << timings.host_to_device_ms << ',' << timings.compute_ms << ','
@@ -170,7 +171,9 @@ int main(int argc, char** argv) {
         const auto load_end = Clock::now();
         const auto voltage = beamformer::unpack_voltage(packed, dims);
         const auto unpack_end = Clock::now();
-        const auto intensity = beamformer::cpu_beamform_intensity(voltage, weights, dims);
+        beamformer::CudaBeamformerTimings cuda_timings;
+        const auto intensity =
+            beamformer::cuda_beamform_intensity(voltage, weights, dims, &cuda_timings);
         const auto compute_end = Clock::now();
         beamformer::write_intensities(options.output, intensity, dims);
         const auto write_end = Clock::now();
@@ -178,7 +181,10 @@ int main(int argc, char** argv) {
         Timings timings;
         timings.load_ms = elapsed_ms(total_start, load_end);
         timings.unpack_ms = elapsed_ms(load_end, unpack_end);
-        timings.compute_ms = elapsed_ms(unpack_end, compute_end);
+        timings.setup_ms = cuda_timings.setup_ms;
+        timings.host_to_device_ms = cuda_timings.host_to_device_ms;
+        timings.compute_ms = cuda_timings.kernel_ms;
+        timings.device_to_host_ms = cuda_timings.device_to_host_ms;
         timings.write_ms = elapsed_ms(compute_end, write_end);
         timings.total_ms = elapsed_ms(total_start, write_end);
 
@@ -188,27 +194,37 @@ int main(int argc, char** argv) {
         const double output_rate = compute_seconds > 0.0 ? outputs / compute_seconds : 0.0;
         const double gmac_rate =
             compute_seconds > 0.0 ? complex_macs / compute_seconds / 1.0e9 : 0.0;
+        const double cuda_call_ms = elapsed_ms(unpack_end, compute_end);
+        const double pipeline_ms = timings.host_to_device_ms + timings.compute_ms
+                                   + timings.device_to_host_ms;
+        const double pipeline_output_rate =
+            pipeline_ms > 0.0 ? outputs / (pipeline_ms / 1000.0) : 0.0;
 
         if (options.metrics) {
             append_metrics(*options.metrics, dims, timings, output_rate, gmac_rate);
         }
 
         std::cout << std::fixed << std::setprecision(3)
-                  << "CPU beamforming complete: layout=[T=" << dims.n_time
+                  << "CUDA beamforming complete: layout=[T=" << dims.n_time
                   << "][F=" << dims.n_freq << "][B=" << dims.n_beams << "]\n"
                   << "load_ms=" << timings.load_ms
                   << " unpack_ms=" << timings.unpack_ms
-                  << " compute_ms=" << timings.compute_ms
+                  << " setup_ms=" << timings.setup_ms
+                  << " host_to_device_ms=" << timings.host_to_device_ms
+                  << " kernel_ms=" << timings.compute_ms
+                  << " device_to_host_ms=" << timings.device_to_host_ms
+                  << " cuda_call_ms=" << cuda_call_ms
                   << " write_ms=" << timings.write_ms
                   << " total_ms=" << timings.total_ms << "\n"
-                  << "output_elements_per_second=" << output_rate
+                  << "kernel_output_elements_per_second=" << output_rate
+                  << " pipeline_output_elements_per_second=" << pipeline_output_rate
                   << " complex_GMAC_per_second=" << gmac_rate
                   << " peak_integrated_beam=" << peak_beam(intensity, dims) << "\n"
                   << "Wrote " << intensity.size() * sizeof(float) << " bytes to "
                   << options.output << "\n";
         return 0;
     } catch (const std::exception& error) {
-        std::cerr << "beamformer_cpu: " << error.what() << "\n";
+        std::cerr << "beamformer_cuda: " << error.what() << "\n";
         return 1;
     }
 }

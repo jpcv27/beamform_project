@@ -100,8 +100,8 @@ Vec3 direction_from_lm(const float l, const float m) {
 
 std::vector<Vec3> default_beam_grid(const std::size_t n_beams, const float l_step,
                                     const float m) {
-    if (n_beams == 0 || n_beams > 10) {
-        throw std::invalid_argument("beam grid size must be between 1 and 10");
+    if (n_beams == 0 || n_beams > 64) {
+        throw std::invalid_argument("beam grid size must be between 1 and 64");
     }
     if (!std::isfinite(l_step) || l_step <= 0.0F) {
         throw std::invalid_argument("beam l step must be positive and finite");

@@ -1,0 +1,63 @@
+#pragma once
+
+#include "beamformer/config.hpp"
+#include "beamformer/formats.hpp"
+
+#include <cstddef>
+#include <memory>
+#include <string>
+
+namespace beamformer {
+
+struct CudaBeamformerTimings {
+    double setup_ms = 0.0;
+    double host_to_device_ms = 0.0;
+    double kernel_ms = 0.0;
+    double device_to_host_ms = 0.0;
+};
+
+struct CudaDeviceInfo {
+    std::string name;
+    int compute_major = 0;
+    int compute_minor = 0;
+    std::size_t global_memory_bytes = 0;
+    int driver_version = 0;
+    int runtime_version = 0;
+};
+
+CudaDeviceInfo cuda_device_info();
+
+// Reuses device buffers, stream, and events across benchmark iterations.
+// Weights are uploaded separately so they can remain resident while voltage
+// blocks and intensity products move for every pipeline iteration.
+class CudaBeamformerWorkspace {
+  public:
+    explicit CudaBeamformerWorkspace(const Dimensions& capacity);
+    ~CudaBeamformerWorkspace();
+
+    CudaBeamformerWorkspace(const CudaBeamformerWorkspace&) = delete;
+    CudaBeamformerWorkspace& operator=(const CudaBeamformerWorkspace&) = delete;
+
+    double setup_ms() const;
+    double upload_voltage(const ComplexVoltage& voltage, const Dimensions& dims);
+    double upload_weights(const Weights& weights, const Dimensions& dims);
+    double run_kernel(const Dimensions& dims);
+    double download_intensity(Intensities& intensity, const Dimensions& dims);
+    CudaBeamformerTimings run_pipeline(const ComplexVoltage& voltage,
+                                       Intensities& intensity,
+                                       const Dimensions& dims);
+
+  private:
+    struct Impl;
+    std::unique_ptr<Impl> impl_;
+};
+
+// Direct voltage beamformer with one CUDA thread per [time][frequency][beam]
+// output. Inputs and output use the same layouts and numerical conventions as
+// cpu_beamform_intensity.
+Intensities cuda_beamform_intensity(const ComplexVoltage& voltage,
+                                    const Weights& weights,
+                                    const Dimensions& dims,
+                                    CudaBeamformerTimings* timings = nullptr);
+
+} // namespace beamformer

@@ -24,8 +24,11 @@ if(BEAMFORMER_ENABLE_CUDA)
 endif()
 
 add_library(beamformer_core
+    src/cpu_beamformer.cpp
     src/geometry.cpp
+    src/io.cpp
     src/synthetic_data.cpp
+    src/weights.cpp
 )
 target_include_directories(beamformer_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
 target_compile_definitions(beamformer_core PUBLIC BEAMFORMER_HAS_CUDA=$<BOOL:${BEAMFORMER_HAS_CUDA}>)
@@ -33,6 +36,30 @@ target_compile_options(beamformer_core PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-Wall;-
 
 add_executable(generate_fake_data tools/generate_fake_data.cpp)
 target_link_libraries(generate_fake_data PRIVATE beamformer_core)
+
+add_executable(generate_weights tools/generate_weights.cpp)
+target_link_libraries(generate_weights PRIVATE beamformer_core)
+
+add_executable(beamformer_cpu tools/beamformer_cpu.cpp)
+target_link_libraries(beamformer_cpu PRIVATE beamformer_core)
+
+if(BEAMFORMER_HAS_CUDA)
+    add_library(beamformer_cuda_core src/cuda_beamformer.cu)
+    target_include_directories(beamformer_cuda_core
+        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
+    )
+    target_link_libraries(beamformer_cuda_core PUBLIC beamformer_core)
+    set_target_properties(beamformer_cuda_core PROPERTIES
+        CUDA_STANDARD 17
+        CUDA_STANDARD_REQUIRED ON
+    )
+
+    add_executable(beamformer_cuda tools/beamformer_cuda.cpp)
+    target_link_libraries(beamformer_cuda PRIVATE beamformer_cuda_core)
+
+    add_executable(benchmark_cpu_cuda tools/benchmark_cpu_cuda.cpp)
+    target_link_libraries(benchmark_cpu_cuda PRIVATE beamformer_cuda_core)
+endif()
 
 include(CTest)
 if(BUILD_TESTING)
@@ -50,4 +77,9 @@ if(BUILD_TESTING)
     target_link_libraries(test_synthetic_data PRIVATE beamformer_core)
     target_compile_options(test_synthetic_data PRIVATE -UNDEBUG)
     add_test(NAME synthetic_data COMMAND test_synthetic_data)
+
+    add_executable(test_cpu_beamformer tests/test_cpu_beamformer.cpp)
+    target_link_libraries(test_cpu_beamformer PRIVATE beamformer_core)
+    target_compile_options(test_cpu_beamformer PRIVATE -UNDEBUG)
+    add_test(NAME cpu_beamformer COMMAND test_cpu_beamformer)
 endif()

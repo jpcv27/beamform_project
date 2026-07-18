@@ -33,11 +33,8 @@ inline void validate_dimensions(const Dimensions& dims) {
     if (dims.n_ant != 32 && dims.n_ant != 64) {
         throw std::invalid_argument("n_ant must be either 32 or 64");
     }
-    const bool validation_beam_count = dims.n_beams >= 1 && dims.n_beams <= 10;
-    const bool final_beam_count = dims.n_beams == dims.n_ant;
-    if (!validation_beam_count && !final_beam_count) {
-        throw std::invalid_argument(
-            "n_beams must be between 1 and 10, or equal to n_ant for the final grid");
+    if (dims.n_beams == 0 || dims.n_beams > dims.n_ant) {
+        throw std::invalid_argument("n_beams must be between 1 and n_ant");
     }
 }
 

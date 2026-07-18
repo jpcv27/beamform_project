@@ -5,8 +5,8 @@ equivalent CUDA implementation. It is intentionally not integrated into Kotekan.
 
 ## Current implementation
 
-The input foundation, synthetic data, weight generation, and serial CPU reference are
-available:
+The input foundation, synthetic data, weight generation, serial CPU reference, and direct
+CUDA implementation are available:
 
 - CMake/C++17 project with optional CUDA detection;
 - the packed output layout produced by `rfsocHandlerShuffle`;
@@ -16,27 +16,36 @@ available:
 - 672 frequency centers `300 + 0.3*channel` MHz, spanning 300 to 501.3 MHz;
 - optional position and frequency overrides from text files;
 - deterministic beam grids in direction cosines;
-- 1 to 10 beams for compact validation and final 32/64-beam rectangular grids;
+- 1 to `n_ant` beams, including compact validation and final 32/64-beam grids;
 - one-hot, constant, point-source, and seeded-noise voltage generation;
 - a small `generate_fake_data` CLI that writes headerless RFSoC-layout files;
 - geometric complex `float32` weights in `[beam][frequency][element]` order;
 - a serial CPU beamformer that produces `float32` intensity in
   `[time][frequency][beam]` order;
+- a CUDA beamformer with one thread per `[time][frequency][beam]` output and a direct
+  complex sum over all elements;
+- CPU and CUDA paths that share the host-side signed `int4` unpacking and consume the
+  same `ComplexFloat` voltage and weight arrays;
 - strict binary-size validation and optional per-run CSV timing metrics.
 
-The CUDA reference, CPU/GPU numerical comparison, repeatable benchmark sweep, and runtime
-plots remain pending. CPU validation and full-sky coverage plots are available now.
+The complete CPU/CUDA validation matrix, repeatable timing sweep, summary tables, and
+comparison plots are available. CPU point-source validation and full-sky beam-coverage
+plots are also included.
 
 ## Build and test
 
 ```bash
-cmake -S . -B build -DBEAMFORMER_ENABLE_CUDA=ON -DCMAKE_BUILD_TYPE=Release
+cmake -S . -B build \
+    -DBEAMFORMER_ENABLE_CUDA=ON \
+    -DCMAKE_CUDA_ARCHITECTURES=native \
+    -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 ```
 
-CUDA is detected during configuration but no CUDA kernel is built yet. The CPU code is
-kept serial to serve as a transparent numerical reference.
+When a CUDA compiler is found, CMake builds `beamformer_cuda`; otherwise the CPU-only
+targets remain available. `CMAKE_CUDA_ARCHITECTURES=89` can replace `native` for the
+tested RTX 4090. The CPU code remains serial as a transparent numerical reference.
 
 ## Generate synthetic voltage files
 
@@ -66,12 +75,12 @@ Each command below writes exactly `n_time * 672 * n_ant` bytes:
 The point source uses
 `x_a[f] = A * exp(-j * 2*pi*frequency[f]*dot(position[a], direction)/c)`,
 quantized to signed `int4`, and repeats that spectrum for every requested time sample.
-For 1 to 10 validation beams, the default line uses
+For non-final validation and benchmark beam counts, the default line uses
 `l=(beam-floor(n_beams/2))*0.02`, `m=0`. When `n_beams=n_ant`, a rectangular grid is
 designed at 400 MHz using `delta_l=lambda/D_x` and `delta_m=lambda/D_y`; its fixed
 directions are reused at every channel while weights remain frequency-dependent.
 
-## Generate weights and run the CPU reference
+## Generate weights and run CPU/CUDA
 
 The following commands use five beams at `l = -0.04, -0.02, 0, 0.02, 0.04`, matching
 the default synthetic point source with the last beam:
@@ -84,13 +93,21 @@ the default synthetic point source with the last beam:
 ./build/beamformer_cpu \
     --input point_source.bin --weights weights.bin \
     --n-time 32 --n-ant 64 --n-beams 5 \
-    --output cpu_intensity.bin --metrics cpu_metrics.csv
+    --output cpu_intensity.bin --metrics metrics.csv
+
+./build/beamformer_cuda \
+    --input point_source.bin --weights weights.bin \
+    --n-time 32 --n-ant 64 --n-beams 5 \
+    --output cuda_intensity.bin --metrics metrics.csv
 ```
 
-`beamformer_cpu` reports the peak integrated beam and separates `load_ms`, `unpack_ms`,
-`compute_ms`, `write_ms`, and `total_ms`. The CSV also records output elements per second
-and complex multiply-accumulates per second. Repeated invocations append rows, allowing a
-later CPU/GPU benchmark sweep to use one common table.
+Both executables report the peak integrated beam and write the same output layout. CUDA
+timing separates device/context setup, host-to-device copies, kernel execution, and the
+device-to-host copy. In the common CSV, `compute_ms` means the serial loop for CPU and the
+kernel event time for CUDA; CPU rows store zero for CUDA-only stages. Throughput and
+complex GMAC/s are derived from `compute_ms`. Repeated invocations append rows to one
+table, but a proper benchmark should include warmup and repeated samples rather than use
+the first smoke run.
 
 ## Binary products
 
@@ -156,7 +173,7 @@ The current generated artifacts are:
 - `results/beam_grid_32_full_sky.png`;
 - `results/cpu_32beam_point_source_validation.png`.
 
-Once a CUDA output exists, use the same script for numerical and graphical comparison:
+Use the same script for numerical and graphical CPU/CUDA comparison:
 
 ```bash
 conda run -n kotekan_test python tools/plot_results.py \
@@ -212,3 +229,90 @@ Default positions are row-major `(x, y, z)` coordinates in metres and are indexe
 the output `element` above. Position override files contain three whitespace- or
 comma-separated values per line. Frequency override files contain one positive frequency
 in hertz per line. Blank lines and `#` comments are accepted.
+
+## Initial CUDA smoke check
+
+The first manual check used `T=4`, `F=672`, `E=32`, and five beams with the synthetic
+point source at `l=0.04`, `m=0`. CPU and CUDA both selected beam 4. Across 13440 output
+values, `max_abs_error=0.005859375`, `max_relative_error=4.76e-7`, and NumPy
+`allclose(rtol=1e-5, atol=1e-3)` passed. On the tested RTX 4090 the tiny workload took
+about 0.070 ms in the kernel, while the first-process CUDA setup took about 91 ms. These
+numbers only establish that the implementation runs and is numerically sensible; they are
+not the final CPU/GPU performance result.
+
+## Reproducible CPU/CUDA benchmark
+
+The benchmark keeps `F=672` fixed and runs the agreed matrix:
+
+- `n_ant=32`, `n_beams={1,4,16,32}`;
+- `n_ant=64`, `n_beams={1,4,16,32,48,64}`;
+- `n_time={1,16,256,1024,4096,15360}`;
+- three warmups and ten measured repetitions by default.
+
+```bash
+./build/benchmark_cpu_cuda \
+    --output-prefix results/cpu_cuda_benchmark
+
+conda run -n kotekan_test python tools/plot_benchmark.py \
+    --input-prefix results/cpu_cuda_benchmark
+```
+
+The process generates one deterministic signed-`int4` noise spectrum per antenna count
+and repeats it over time outside all timed regions. CPU and CUDA consume the same
+unpacked values and weights. CPU and GPU measurements run in separate warm blocks so a
+long serial CPU iteration does not cool the GPU immediately before its sample.
+
+The principal steady-state comparison keeps weights resident on the GPU. It reports a
+resident CUDA kernel time and a pipeline wall time containing voltage H2D, kernel, output
+D2H, and synchronization. Context/buffer setup and the one-time weight upload are recorded
+separately. For the maximum 64-antenna case, the estimated working sets are approximately
+9.86 GiB on the host and 7.40 GiB on the GPU.
+
+Work and throughput use these explicit conventions:
+
+```text
+Ncmac = n_time * n_freq * n_beams * n_ant
+estimated_FLOP = 8 * Ncmac + 3 * (n_time * n_freq * n_beams)
+```
+
+`Ncmac/time` is reported as CMAC/s. Estimated FLOP/s counts eight real operations per
+complex multiply-accumulate and three for the final squared magnitude. CSV results contain
+every repetition; plots use medians and p25/p75 intervals.
+
+### RTX 4090 benchmark result
+
+The full default sweep produced 600 timing samples and 60 numerical comparisons. With one
+beam, the end-to-end GPU pipeline first exceeds the serial CPU at `n_time=16` for both
+antenna counts. With four or more beams, it is already faster at `n_time=1`.
+
+For `n_ant=64`, `n_beams=64`, and `n_time=15360`, median time was 42.331 s on the serial
+CPU, 254.321 ms for the resident CUDA kernel, and 953.775 ms for voltage H2D + kernel +
+intensity D2H. This corresponds to `166.45x` kernel-only and `44.38x` pipeline speedup.
+The same configuration reached an estimated 1.338 TFLOP/s in the kernel and 356.7 GFLOP/s
+including transfers. Its CPU and pipeline p25/p75 intervals were 39.083-43.097 s and
+953.235-955.690 ms, respectively, so plots should be interpreted from medians and their
+intervals rather than individual samples.
+
+All 60 configurations passed the combined `atol=1e-3`, `rtol=1e-5` criterion with zero
+values outside tolerance and no CPU/GPU peak-beam mismatches. Across the sweep,
+`max_absolute_error=0.005859375`, maximum sampled p99 relative error was `9.77e-7`, maximum
+normalized RMSE was `1.18e-7`, and minimum correlation was `0.999999999945`.
+
+Generated products are:
+
+- `results/cpu_cuda_benchmark_timings.csv`;
+- `results/cpu_cuda_benchmark_validation.csv`;
+- `results/cpu_cuda_benchmark_metadata.json`;
+- `results/cpu_cuda_benchmark_summary.csv`;
+- `results/cpu_cuda_benchmark_performance.png`;
+- `results/cpu_cuda_benchmark_speedup_heatmaps.png`;
+- `results/cpu_cuda_benchmark_validation.png`.
+
+For a short functional check before a full run:
+
+```bash
+./build/benchmark_cpu_cuda \
+    --output-prefix /tmp/cpu_cuda_benchmark_smoke \
+    --n-ant 32 --times 1,16 --beams-32 1,4 \
+    --warmup 1 --repetitions 2
+```

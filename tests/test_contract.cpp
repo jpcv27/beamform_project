@@ -82,10 +82,13 @@ int main() {
     assert(throws_invalid_argument([] { validate_dimensions({32, 671, 32, 1}); }));
     assert(throws_invalid_argument([] { validate_dimensions({32, 672, 48, 1}); }));
     assert(throws_invalid_argument([] { validate_dimensions({32, 672, 32, 0}); }));
-    assert(throws_invalid_argument([] { validate_dimensions({32, 672, 32, 11}); }));
+    validate_dimensions({32, 672, 32, 11});
+    validate_dimensions({32, 672, 32, 16});
+    validate_dimensions({32, 672, 64, 48});
     validate_dimensions({32, 672, 32, 32});
     validate_dimensions({32, 672, 64, 64});
-    assert(throws_invalid_argument([] { validate_dimensions({32, 672, 32, 31}); }));
+    assert(throws_invalid_argument([] { validate_dimensions({32, 672, 32, 33}); }));
+    assert(throws_invalid_argument([] { validate_dimensions({32, 672, 64, 65}); }));
 
     return 0;
 }

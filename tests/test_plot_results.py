@@ -35,6 +35,7 @@ class PlotResultsTest(unittest.TestCase):
         directions = plot_results.default_beam_directions(5)
         np.testing.assert_allclose(directions[:, 0], [-0.04, -0.02, 0.0, 0.02, 0.04])
         np.testing.assert_allclose(np.linalg.norm(directions, axis=1), 1.0)
+        self.assertEqual(plot_results.default_beam_directions(16).shape, (16, 3))
 
     def test_uv_coverage_contains_conjugate_pairs(self):
         positions = plot_results.default_positions(32)
