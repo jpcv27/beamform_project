@@ -1,5 +1,6 @@
 #include "beamformer/config.hpp"
 #include "beamformer/geometry.hpp"
+#include "beamformer/physics.hpp"
 
 #include <cassert>
 #include <cmath>
@@ -58,6 +59,14 @@ int main() {
 
     const auto beams_32 = rectangular_beam_grid(32);
     assert(beams_32.size() == 32);
+    const float wavelength_400_m =
+        static_cast<float>(speed_of_light_m_per_s / 400'000'000.0);
+    const float expected_delta_l = wavelength_400_m / (8.0F * default_spacing_m);
+    const float expected_delta_m = wavelength_400_m / (4.0F * default_spacing_m);
+    assert(close(beams_32[1][0] - beams_32[0][0], expected_delta_l));
+    assert(close(beams_32[8][1] - beams_32[0][1], expected_delta_m));
+    assert(close(beams_32[12][0], 0.5F * expected_delta_l));
+    assert(close(beams_32[12][1], -0.5F * expected_delta_m));
     assert(beams_32.front()[0] < 0.0F && beams_32.front()[1] < 0.0F);
     assert(beams_32.back()[0] > 0.0F && beams_32.back()[1] > 0.0F);
     for (const auto& direction : beams_32) {

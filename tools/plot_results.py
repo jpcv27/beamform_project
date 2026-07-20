@@ -89,8 +89,8 @@ def rectangular_beam_directions(
 ) -> np.ndarray:
     rows, columns = array_shape(n_ant)
     wavelength_m = SPEED_OF_LIGHT_M_PER_S / design_frequency_hz
-    delta_l = wavelength_m / ((columns - 1) * spacing_m)
-    delta_m = wavelength_m / ((rows - 1) * spacing_m)
+    delta_l = wavelength_m / (columns * spacing_m)
+    delta_m = wavelength_m / (rows * spacing_m)
     l_centers = (np.arange(columns) - (columns - 1) / 2.0) * delta_l
     m_centers = (np.arange(rows) - (rows - 1) / 2.0) * delta_m
     directions = []
@@ -354,8 +354,8 @@ def plot_sky_coverage(args: argparse.Namespace, frequencies: np.ndarray,
 
     rows, columns = array_shape(args.n_ant)
     wavelength_design = SPEED_OF_LIGHT_M_PER_S / args.design_frequency_hz
-    delta_l = wavelength_design / ((columns - 1) * args.spacing_m)
-    delta_m = wavelength_design / ((rows - 1) * args.spacing_m)
+    delta_l = wavelength_design / (columns * args.spacing_m)
+    delta_m = wavelength_design / (rows * args.spacing_m)
     fig, axes = plt.subplots(2, 3, figsize=(17, 10), constrained_layout=True)
     fig.suptitle(
         f"Full-sky rectangular beam grid | {rows}x{columns} array, "

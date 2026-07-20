@@ -65,6 +65,34 @@ class PlotBenchmarkTest(unittest.TestCase):
         np.testing.assert_array_equal(times, [1, 16])
         np.testing.assert_allclose(matrix, [[0.5, 1.0], [1.5, 3.0]])
 
+    def test_positive_log_limits_ignore_zero_and_handle_all_zero(self):
+        limits = plot_benchmark.positive_log_limits(
+            np.asarray([[0.0, 1.0e-7], [1.0e-5, np.nan]])
+        )
+        self.assertEqual(limits, (1.0e-7, 1.0e-5))
+        self.assertIsNone(plot_benchmark.positive_log_limits(np.zeros((2, 3))))
+
+    def test_validation_plot_handles_zero_and_small_errors(self):
+        records = [
+            {"n_ant": 32.0, "n_beams": 1.0, "n_time": 1.0,
+             "n_outputs": 672.0, "max_relative_error": 0.0,
+             "outside_tolerance": 0.0},
+            {"n_ant": 32.0, "n_beams": 1.0, "n_time": 16.0,
+             "n_outputs": 10_752.0, "max_relative_error": 0.0,
+             "outside_tolerance": 0.0},
+            {"n_ant": 32.0, "n_beams": 4.0, "n_time": 1.0,
+             "n_outputs": 2_688.0, "max_relative_error": 1.0e-7,
+             "outside_tolerance": 0.0},
+            {"n_ant": 32.0, "n_beams": 4.0, "n_time": 16.0,
+             "n_outputs": 43_008.0, "max_relative_error": 1.0e-5,
+             "outside_tolerance": 0.0},
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "validation.png"
+            plot_benchmark.plot_validation(records, output)
+            self.assertTrue(output.exists())
+            self.assertGreater(output.stat().st_size, 0)
+
     def test_csv_loader_and_summary_writer(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "timings.csv"

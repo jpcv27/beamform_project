@@ -47,6 +47,14 @@ class PlotResultsTest(unittest.TestCase):
     def test_rectangular_final_grid(self):
         directions = plot_results.rectangular_beam_directions(32)
         self.assertEqual(directions.shape, (32, 3))
+        wavelength_m = plot_results.SPEED_OF_LIGHT_M_PER_S / 400_000_000.0
+        expected_delta_l = wavelength_m / (8 * 0.6)
+        expected_delta_m = wavelength_m / (4 * 0.6)
+        np.testing.assert_allclose(np.diff(directions[:8, 0]), expected_delta_l)
+        self.assertAlmostEqual(directions[8, 1] - directions[0, 1], expected_delta_m)
+        np.testing.assert_allclose(
+            directions[12, :2], [0.5 * expected_delta_l, -0.5 * expected_delta_m]
+        )
         np.testing.assert_allclose(np.linalg.norm(directions, axis=1), 1.0)
         self.assertLess(directions[0, 0], 0.0)
         self.assertLess(directions[0, 1], 0.0)
@@ -98,7 +106,6 @@ class PlotResultsTest(unittest.TestCase):
         changed = plot_results.comparison_metrics(reference, candidate, 1.0e-3, 1.0e-3)
         self.assertAlmostEqual(changed["max_absolute_error"], 0.2, places=5)
         self.assertEqual(changed["outside_tolerance"], 1)
-
 
 if __name__ == "__main__":
     unittest.main()

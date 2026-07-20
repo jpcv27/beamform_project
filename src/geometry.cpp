@@ -135,10 +135,8 @@ std::vector<Vec3> rectangular_beam_grid(const std::size_t n_ant,
 
     const double wavelength_m = speed_of_light_m_per_s
                                 / static_cast<double>(design_frequency_hz);
-    const double aperture_x_m = static_cast<double>(columns - 1) * spacing_m;
-    const double aperture_y_m = static_cast<double>(rows - 1) * spacing_m;
-    const double delta_l = wavelength_m / aperture_x_m;
-    const double delta_m = wavelength_m / aperture_y_m;
+    const double delta_l = wavelength_m / (static_cast<double>(columns) * spacing_m);
+    const double delta_m = wavelength_m / (static_cast<double>(rows) * spacing_m);
 
     std::vector<Vec3> directions;
     directions.reserve(n_ant);

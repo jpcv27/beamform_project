@@ -1,7 +1,7 @@
-# Offline CHARTS Voltage Beamformer PoC
+# CHARTS Voltage Beamformer PoC
 
 Small standalone proof of concept for comparing a direct CPU voltage beamformer with an
-equivalent CUDA implementation. It is intentionally not integrated into Kotekan.
+equivalent CUDA implementation.
 
 ## Current implementation
 
@@ -50,28 +50,32 @@ and GPU maxima, as well as every per-time maximum, to recover beam 12; it also c
 CPU/GPU intensities with `atol=1e-3`, `rtol=1e-5`.
 
 On the tested RTX 4090, all four time sizes recovered beam 12 on both backends. The
-integrated target-to-runner-up power ratio was `19.182` and the maximum absolute CPU/GPU
-error was `0.00390625`, with no output outside the combined tolerance.
+integrated target-to-runner-up power ratio was `28.675` and the maximum absolute CPU/GPU
+error was `0.0078125`, with no output outside the combined tolerance.
 
 ```bash
 ctest --test-dir build -R cuda_point_source --output-on-failure -V
 ```
 
 The graphical realization uses `T=4` and the exact beam-12 direction
-`(l,m)=(0.089223945833,-0.208189206944)`. After generating the common packed voltage and
-weight files and running both backends, reproduce both dashboards with:
+`(l,m)=(0.078070952604,-0.156141905208)`. After generating the common packed voltage and
+weight files and running both backends, reproduce the separate CPU and GPU dashboards
+with:
 
 ```bash
 conda run -n kotekan_test python tools/plot_results.py \
-    --input results/point_source_32beam_cpu_intensity.bin --label CPU \
-    --compare results/point_source_32beam_cuda_intensity.bin --compare-label CUDA \
+    --input results/point_source_32beam_nxd_grid_cpu_intensity.bin --label CPU \
     --n-time 4 --n-freq 672 --n-ant 32 --n-beams 32 \
     --synthetic-type point-source \
-    --source-l 0.089223945833 --source-m -0.208189206944 --amplitude 4 \
-    --abs-tolerance 0.001 --rel-tolerance 0.00001 \
-    --output results/cpu_cuda_point_source_32beam_validation.png \
-    --comparison-output results/cpu_cuda_point_source_32beam_comparison.png \
-    --summary-json results/cpu_cuda_point_source_32beam_metrics.json
+    --source-l 0.078070952604 --source-m -0.156141905208 --amplitude 4 \
+    --output results/cpu_32beam_point_source_validation_nxd_grid.png
+
+conda run -n kotekan_test python tools/plot_results.py \
+    --input results/point_source_32beam_nxd_grid_gpu_intensity.bin --label GPU \
+    --n-time 4 --n-freq 672 --n-ant 32 --n-beams 32 \
+    --synthetic-type point-source \
+    --source-l 0.078070952604 --source-m -0.156141905208 --amplitude 4 \
+    --output results/gpu_32beam_point_source_validation_nxd_grid.png
 ```
 
 When a CUDA compiler is found, CMake builds `beamformer_cuda`; otherwise the CPU-only
@@ -108,8 +112,9 @@ The point source uses
 quantized to signed `int4`, and repeats that spectrum for every requested time sample.
 For non-final validation and benchmark beam counts, the default line uses
 `l=(beam-floor(n_beams/2))*0.02`, `m=0`. When `n_beams=n_ant`, a rectangular grid is
-designed at 400 MHz using `delta_l=lambda/D_x` and `delta_m=lambda/D_y`; its fixed
-directions are reused at every channel while weights remain frequency-dependent.
+designed at 400 MHz using `delta_l=lambda/(N_x*d)` and
+`delta_m=lambda/(N_y*d)`; its fixed directions are reused at every channel while weights
+remain frequency-dependent.
 
 ## Generate weights and run CPU/CUDA
 
@@ -205,7 +210,9 @@ The current generated artifacts are:
 - `results/cpu_32beam_point_source_validation.png`;
 - `results/cpu_cuda_point_source_32beam_validation.png`;
 - `results/cpu_cuda_point_source_32beam_comparison.png`;
-- `results/cpu_cuda_point_source_32beam_metrics.json`.
+- `results/cpu_cuda_point_source_32beam_metrics.json`;
+- `results/cpu_32beam_point_source_validation_nxd_grid.png`;
+- `results/gpu_32beam_point_source_validation_nxd_grid.png`.
 
 Use the same script for numerical and graphical CPU/CUDA comparison:
 
@@ -341,6 +348,11 @@ Generated products are:
 - `results/cpu_cuda_benchmark_performance.png`;
 - `results/cpu_cuda_benchmark_speedup_heatmaps.png`;
 - `results/cpu_cuda_benchmark_validation.png`.
+
+In the numerical-validation dashboard, exact zeros are not replaced by an artificial
+floor. Positive errors use logarithmic color normalization, zero-error cells are white,
+and an all-zero outside-tolerance panel is light green. Cell annotations remain the exact
+CSV values.
 
 For a short functional check before a full run:
 

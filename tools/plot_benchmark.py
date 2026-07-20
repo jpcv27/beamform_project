@@ -103,6 +103,18 @@ def matrix_for(records: Iterable[dict[str, float]], n_ant: int,
     return beams, times, matrix
 
 
+def positive_log_limits(values: np.ndarray) -> tuple[float, float] | None:
+    values = np.asarray(values, dtype=np.float64)
+    positive = values[np.isfinite(values) & (values > 0.0)]
+    if not positive.size:
+        return None
+    lower = float(np.min(positive))
+    upper = float(np.max(positive))
+    if lower == upper:
+        lower = upper / 10.0
+    return lower, upper
+
+
 def _records_for(summary: list[dict[str, float]], n_ant: int,
                  n_beams: int) -> list[dict[str, float]]:
     return sorted(
@@ -198,13 +210,19 @@ def plot_performance(summary: list[dict[str, float]], metadata: dict,
     plt.close(figure)
 
 
-def _annotate_matrix(axis, matrix: np.ndarray, formatter: str) -> None:
+def _annotate_matrix(axis, matrix: np.ndarray, formatter: str,
+                     norm=None, colormap=None) -> None:
     for row in range(matrix.shape[0]):
         for column in range(matrix.shape[1]):
             value = matrix[row, column]
             if np.isfinite(value):
+                text_color = "black"
+                if norm is not None and colormap is not None and value > 0.0:
+                    red, green, blue, _ = colormap(norm(value))
+                    luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue
+                    text_color = "white" if luminance < 0.48 else "black"
                 axis.text(column, row, format(value, formatter), ha="center",
-                          va="center", fontsize=8, color="black")
+                          va="center", fontsize=8, color=text_color)
 
 
 def plot_speedup_heatmaps(summary: list[dict[str, float]],
@@ -252,7 +270,7 @@ def plot_validation(validation: list[dict[str, float]],
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
-    from matplotlib.colors import LogNorm
+    from matplotlib.colors import ListedColormap, LogNorm
 
     records = [dict(record, outside_fraction=(
         record["outside_tolerance"] / record["n_outputs"]))
@@ -268,23 +286,38 @@ def plot_validation(validation: list[dict[str, float]],
             ("outside_fraction", "Fracción fuera de tolerancia"),
         )):
             beams, times, matrix = matrix_for(records, n_ant, field)
-            display = np.maximum(matrix, 1.0e-12)
             axis = axes[row, column]
-            image = axis.imshow(
-                display, aspect="auto", origin="lower", cmap="magma",
-                norm=LogNorm(vmin=float(np.nanmin(display)),
-                             vmax=max(float(np.nanmax(display)),
-                                      float(np.nanmin(display)) * 1.01)),
-            )
+            log_limits = positive_log_limits(matrix)
+            if log_limits is None:
+                colormap = ListedColormap(["#e8f5e9"])
+                axis.imshow(
+                    np.zeros_like(matrix), aspect="auto", origin="lower",
+                    cmap=colormap, vmin=0.0, vmax=1.0,
+                )
+                title_suffix = " | todas las configuraciones = 0"
+                _annotate_matrix(axis, matrix, ".1e")
+            else:
+                colormap = plt.get_cmap("viridis").copy()
+                colormap.set_bad("white")
+                norm = LogNorm(vmin=log_limits[0], vmax=log_limits[1])
+                display = np.ma.masked_invalid(np.ma.masked_less_equal(matrix, 0.0))
+                image = axis.imshow(
+                    display, aspect="auto", origin="lower", cmap=colormap, norm=norm,
+                )
+                title_suffix = " | log; blanco = 0"
+                _annotate_matrix(axis, matrix, ".1e", norm, colormap)
+                figure.colorbar(image, ax=axis, label="valor positivo (escala log)")
             axis.set_xticks(np.arange(len(times)), [str(value) for value in times],
                             rotation=35, ha="right")
             axis.set_yticks(np.arange(len(beams)), [str(value) for value in beams])
             axis.set_xlabel("n_time")
             axis.set_ylabel("n_beams")
-            axis.set_title(f"{title}, n_ant={n_ant}")
-            _annotate_matrix(axis, matrix, ".1e")
-            figure.colorbar(image, ax=axis)
-    figure.suptitle("Validación numérica CPU vs CUDA", fontsize=14)
+            axis.set_title(f"{title}, n_ant={n_ant}{title_suffix}")
+    figure.suptitle(
+        "Validación numérica CPU vs CUDA | colores: valores positivos; "
+        "blanco/verde: cero",
+        fontsize=14,
+    )
     figure.savefig(output_path, dpi=160)
     plt.close(figure)
 
