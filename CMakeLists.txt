@@ -50,6 +50,7 @@ if(BEAMFORMER_HAS_CUDA)
     add_library(beamformer_cuda_core
         src/cuda_beamformer.cu
         src/cuda_offline_runner.cu
+        src/cuda_two_shard_runner.cu
         src/cuda_quantize_int8.cu
     )
     target_include_directories(beamformer_cuda_core
@@ -166,6 +167,16 @@ if(BUILD_TESTING)
         add_test(NAME cuda_offline_runner COMMAND test_cuda_offline_runner)
         set_tests_properties(cuda_offline_runner PROPERTIES
             LABELS "cuda;contract;validation"
+            TIMEOUT 60
+        )
+
+        add_executable(test_cuda_two_shard_runner
+                       tests/test_cuda_two_shard_runner.cpp)
+        target_link_libraries(test_cuda_two_shard_runner PRIVATE beamformer_cuda_core)
+        target_compile_options(test_cuda_two_shard_runner PRIVATE -UNDEBUG)
+        add_test(NAME cuda_two_shard_runner COMMAND test_cuda_two_shard_runner)
+        set_tests_properties(cuda_two_shard_runner PROPERTIES
+            LABELS "cuda;two-shard;contract;validation"
             TIMEOUT 60
         )
 
