@@ -417,4 +417,163 @@ CudaOfflineTwoShardResult CudaOfflineTwoShardRunner::run(
     return result;
 }
 
+void CudaOfflineTwoShardRunner::preload_weights(
+    const std::array<Weights, frequency_shard_count>& weights, const Dimensions& dims) {
+    const std::size_t expected_weights = weight_count(dims, impl_->kernel);
+    for (std::size_t s = 0; s < frequency_shard_count; ++s) {
+        if (weights[s].size() != expected_weights) {
+            throw std::invalid_argument("preload_weights size does not match selected layout");
+        }
+        auto& pipeline = *impl_->pipelines[s];
+        pipeline.host_weights.copy_from(weights[s], expected_weights);
+        check_cuda(cudaMemcpy(pipeline.device_weights.data(), pipeline.host_weights.data(),
+                              expected_weights * sizeof(ComplexFloat), cudaMemcpyHostToDevice),
+                   "cudaMemcpy preload weights");
+    }
+}
+
+std::uint8_t* CudaOfflineTwoShardRunner::pinned_host_voltage_data(const std::size_t shard_id) {
+    if (shard_id >= frequency_shard_count) {
+        throw std::invalid_argument("invalid shard_id for pinned_host_voltage_data");
+    }
+    return impl_->pipelines[shard_id]->host_voltage.data();
+}
+
+CudaOfflineTwoShardResult CudaOfflineTwoShardRunner::run_pinned(
+    const Dimensions& dims, const std::uint64_t frame_id,
+    const std::array<ShardDescriptor, frequency_shard_count>& descriptors) {
+    validate_dimensions(dims);
+    for (std::size_t s = 0; s < frequency_shard_count; ++s) {
+        validate_shard_descriptor(descriptors[s]);
+    }
+    if (descriptors[0].timestamp_start != descriptors[1].timestamp_start
+        || descriptors[0].timestamp_step != descriptors[1].timestamp_step) {
+        throw std::invalid_argument("two-shard inputs must cover the same time range");
+    }
+    if (dims.n_freq != impl_->capacity.n_freq || dims.n_ant != impl_->capacity.n_ant
+        || dims.n_time > impl_->capacity.n_time || dims.n_beams > impl_->capacity.n_beams) {
+        throw std::invalid_argument("two-shard dimensions exceed runner capacity");
+    }
+
+    const std::size_t packed_count = packed_voltage_bytes(dims);
+    const Dimensions output_dims = output_dimensions(dims, impl_->temporal_integration);
+    CudaOfflineTwoShardResult result;
+    result.frame_id = frame_id;
+    for (std::size_t shard_id = 0; shard_id < frequency_shard_count; ++shard_id) {
+        result.output_shards[shard_id] = descriptors[shard_id];
+        result.shards[shard_id].output_dims = output_dims;
+        if (impl_->output == CudaBeamformerOutput::Float32) {
+            result.shards[shard_id].float32_output.resize(
+                output_dims.n_time * output_dims.n_freq * output_dims.n_beams);
+        } else {
+            result.shards[shard_id].quantized_output.codes.resize(
+                quantized_intensity_bytes(output_dims));
+            result.shards[shard_id].quantized_output.parameters.resize(
+                quantization_parameter_count(output_dims));
+        }
+    }
+
+    const auto wall_start = Clock::now();
+    for (std::size_t shard_id = 0; shard_id < frequency_shard_count; ++shard_id) {
+        auto& pipeline = *impl_->pipelines[shard_id];
+        const auto& desc = descriptors[shard_id];
+        const auto stream = pipeline.stream.get();
+        check_cuda(cudaEventRecord(pipeline.start.get(), stream),
+                   "cudaEventRecord two-shard start");
+        check_cuda(cudaMemcpyAsync(pipeline.device_voltage.data(), pipeline.host_voltage.data(),
+                                   packed_count, cudaMemcpyHostToDevice, stream),
+                   "cudaMemcpyAsync two-shard voltage host to device");
+        check_cuda(cudaEventRecord(pipeline.h2d_end.get(), stream),
+                   "cudaEventRecord two-shard H2D end");
+
+        if (impl_->temporal_integration) {
+            launch_packed_integrated_beamformer(
+                impl_->kernel, stream, pipeline.device_voltage.data(),
+                pipeline.device_weights.data(),
+                pipeline.device_float_output->data(),
+                dims, *impl_->temporal_integration);
+        } else {
+            launch_packed_beamformer(impl_->kernel, stream, pipeline.device_voltage.data(),
+                                     pipeline.device_weights.data(),
+                                     pipeline.device_float_output->data(), dims);
+        }
+        check_cuda(cudaEventRecord(pipeline.compute_end.get(), stream),
+                   "cudaEventRecord two-shard compute end");
+    }
+
+    for (std::size_t shard_id = 0; shard_id < frequency_shard_count; ++shard_id) {
+        auto& pipeline = *impl_->pipelines[shard_id];
+        const auto stream = pipeline.stream.get();
+        if (impl_->output == CudaBeamformerOutput::QuantizedInt8) {
+            launch_quantize_integrated_intensity(
+                stream, pipeline.device_float_output->data(), pipeline.device_int8_output->data(),
+                pipeline.device_parameters->data(), output_dims);
+            check_cuda(cudaEventRecord(pipeline.quantization_end.get(), stream),
+                       "cudaEventRecord two-shard quantization end");
+            check_cuda(cudaMemcpyAsync(pipeline.host_int8_output->data(),
+                                       pipeline.device_int8_output->data(),
+                                       result.shards[shard_id].quantized_output.codes.size(),
+                                       cudaMemcpyDeviceToHost, stream),
+                       "cudaMemcpyAsync two-shard int8 output device to host");
+            check_cuda(cudaMemcpyAsync(pipeline.host_parameters->data(),
+                                       pipeline.device_parameters->data(),
+                                       result.shards[shard_id].quantized_output.parameters.size()
+                                           * sizeof(Int8QuantizationParameters),
+                                       cudaMemcpyDeviceToHost, stream),
+                       "cudaMemcpyAsync two-shard parameters device to host");
+        } else {
+            check_cuda(cudaMemcpyAsync(pipeline.host_float_output->data(),
+                                       pipeline.device_float_output->data(),
+                                       result.shards[shard_id].float32_output.size() * sizeof(float),
+                                       cudaMemcpyDeviceToHost, stream),
+                       "cudaMemcpyAsync two-shard float output device to host");
+        }
+        check_cuda(cudaEventRecord(pipeline.d2h_end.get(), stream),
+                   "cudaEventRecord two-shard D2H end");
+    }
+
+    for (const auto& pipeline : impl_->pipelines) {
+        check_cuda(cudaEventSynchronize(pipeline->d2h_end.get()),
+                   "cudaEventSynchronize two-shard output");
+    }
+    const auto wall_end = Clock::now();
+    result.aggregate_wall_ms = elapsed_ms(wall_start, wall_end);
+
+    for (std::size_t shard_id = 0; shard_id < frequency_shard_count; ++shard_id) {
+        auto& pipeline = *impl_->pipelines[shard_id];
+        auto& shard_result = result.shards[shard_id];
+        shard_result.timings.host_to_device_ms = event_elapsed_ms(pipeline.start, pipeline.h2d_end);
+        shard_result.timings.kernel_ms = event_elapsed_ms(pipeline.h2d_end, pipeline.compute_end);
+        if (impl_->output == CudaBeamformerOutput::QuantizedInt8) {
+            shard_result.timings.quantization_ms =
+                event_elapsed_ms(pipeline.compute_end, pipeline.quantization_end);
+            shard_result.timings.device_to_host_ms =
+                event_elapsed_ms(pipeline.quantization_end, pipeline.d2h_end);
+            pipeline.host_int8_output->copy_to(
+                shard_result.quantized_output.codes,
+                shard_result.quantized_output.codes.size());
+            pipeline.host_parameters->copy_to(
+                shard_result.quantized_output.parameters,
+                shard_result.quantized_output.parameters.size());
+        } else {
+            shard_result.timings.device_to_host_ms = event_elapsed_ms(pipeline.compute_end,
+                                                                       pipeline.d2h_end);
+            pipeline.host_float_output->copy_to(shard_result.float32_output,
+                                                shard_result.float32_output.size());
+        }
+        result.aggregate_stage_max_timings.host_to_device_ms = std::max(
+            result.aggregate_stage_max_timings.host_to_device_ms,
+            shard_result.timings.host_to_device_ms);
+        result.aggregate_stage_max_timings.kernel_ms = std::max(
+            result.aggregate_stage_max_timings.kernel_ms, shard_result.timings.kernel_ms);
+        result.aggregate_stage_max_timings.quantization_ms = std::max(
+            result.aggregate_stage_max_timings.quantization_ms,
+            shard_result.timings.quantization_ms);
+        result.aggregate_stage_max_timings.device_to_host_ms = std::max(
+            result.aggregate_stage_max_timings.device_to_host_ms,
+            shard_result.timings.device_to_host_ms);
+    }
+    return result;
+}
+
 } // namespace beamformer

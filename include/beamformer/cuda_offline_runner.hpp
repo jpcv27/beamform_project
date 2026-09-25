@@ -42,6 +42,18 @@ class CudaOfflineFrameRunner {
         const Dimensions& dims, std::uint64_t frame_id,
         const ShardDescriptor& shard);
 
+    // Preload weights to device memory so steady-state timing keeps weights resident.
+    void preload_weights(const Weights& weights, const Dimensions& dims);
+
+    // Direct access to the pinned host voltage buffer.
+    std::uint8_t* pinned_host_voltage_data();
+
+    // Execute steady-state pipeline from pinned host voltage buffer with resident weights.
+    // Measures exact H2D, kernel, quantization, D2H, and synchronization.
+    CudaOfflineFrameResult run_pinned(
+        const Dimensions& dims, std::uint64_t frame_id,
+        const ShardDescriptor& shard);
+
     CudaBeamformerKernel kernel() const;
     CudaBeamformerOutput output() const;
     bool has_temporal_integration() const;

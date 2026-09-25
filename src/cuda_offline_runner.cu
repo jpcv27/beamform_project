@@ -4,8 +4,11 @@
 #include "beamformer/quantization.hpp"
 #include "beamformer/temporal_integration.hpp"
 
+#include "beamformer/cuda_stage_api.hpp"
+
 #include <cuda_runtime.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -13,6 +16,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace beamformer {
 namespace {
@@ -28,6 +32,45 @@ void check_cuda(const cudaError_t status, const char* operation) {
 
 double elapsed_ms(const Clock::time_point start, const Clock::time_point end) {
     return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+class CudaStream {
+  public:
+    CudaStream() { check_cuda(cudaStreamCreate(&stream_), "cudaStreamCreate offline runner"); }
+    ~CudaStream() {
+        if (stream_ != nullptr) {
+            cudaStreamDestroy(stream_);
+        }
+    }
+    CudaStream(const CudaStream&) = delete;
+    CudaStream& operator=(const CudaStream&) = delete;
+    cudaStream_t get() const { return stream_; }
+
+  private:
+    cudaStream_t stream_ = nullptr;
+};
+
+class CudaEvent {
+  public:
+    CudaEvent() { check_cuda(cudaEventCreate(&event_), "cudaEventCreate offline runner"); }
+    ~CudaEvent() {
+        if (event_ != nullptr) {
+            cudaEventDestroy(event_);
+        }
+    }
+    CudaEvent(const CudaEvent&) = delete;
+    CudaEvent& operator=(const CudaEvent&) = delete;
+    cudaEvent_t get() const { return event_; }
+
+  private:
+    cudaEvent_t event_ = nullptr;
+};
+
+double event_elapsed_ms(const CudaEvent& start, const CudaEvent& end) {
+    float milliseconds = 0.0F;
+    check_cuda(cudaEventElapsedTime(&milliseconds, start.get(), end.get()),
+               "cudaEventElapsedTime offline runner");
+    return milliseconds;
 }
 
 template <typename T>
@@ -51,6 +94,7 @@ class DeviceBuffer {
     DeviceBuffer& operator=(const DeviceBuffer&) = delete;
 
     T* data() { return data_; }
+    const T* data() const { return data_; }
     std::size_t bytes() const { return count_ * sizeof(T); }
 
     void copy_from(const std::vector<T>& host, const char* operation) {
@@ -69,6 +113,45 @@ class DeviceBuffer {
 
   private:
     T* data_ = nullptr;
+    std::size_t count_ = 0;
+};
+
+template <typename Value>
+class PinnedBuffer {
+  public:
+    explicit PinnedBuffer(const std::size_t count) : count_(count) {
+        if (count_ == 0 || count_ > std::numeric_limits<std::size_t>::max() / sizeof(Value)) {
+            throw std::invalid_argument("offline pinned buffer has an invalid count");
+        }
+        check_cuda(cudaMallocHost(reinterpret_cast<void**>(&data_), bytes()),
+                   "cudaMallocHost offline pinned buffer");
+    }
+    ~PinnedBuffer() {
+        if (data_ != nullptr) {
+            cudaFreeHost(data_);
+        }
+    }
+    PinnedBuffer(const PinnedBuffer&) = delete;
+    PinnedBuffer& operator=(const PinnedBuffer&) = delete;
+    Value* data() const { return data_; }
+    std::size_t bytes() const { return count_ * sizeof(Value); }
+
+    void copy_from(const std::vector<Value>& source, const std::size_t count) {
+        if (count > count_ || source.size() != count) {
+            throw std::invalid_argument("offline pinned input size does not match");
+        }
+        std::copy(source.begin(), source.end(), data_);
+    }
+
+    void copy_to(std::vector<Value>& destination, const std::size_t count) const {
+        if (count > count_ || destination.size() != count) {
+            throw std::invalid_argument("offline pinned output size does not match");
+        }
+        std::copy(data_, data_ + count, destination.begin());
+    }
+
+  private:
+    Value* data_ = nullptr;
     std::size_t count_ = 0;
 };
 
@@ -98,13 +181,53 @@ struct CudaOfflineFrameRunner::Impl {
           kernel(selected_kernel),
           temporal_integration(selected_integration),
           output(selected_output),
-          workspace(capacity, kernel, temporal_integration, output) {}
+          output_capacity(output_dimensions(capacity, temporal_integration)),
+          workspace(capacity, kernel, temporal_integration, output),
+          device_voltage(packed_voltage_bytes(capacity)),
+          device_weights(weight_count(capacity, kernel)),
+          host_voltage(packed_voltage_bytes(capacity)),
+          host_weights(weight_count(capacity, kernel)) {
+        device_float_output = std::make_unique<DeviceBuffer<float>>(
+            output_capacity.n_time * output_capacity.n_freq * output_capacity.n_beams);
+        if (output == CudaBeamformerOutput::Float32) {
+            host_float_output = std::make_unique<PinnedBuffer<float>>(
+                output_capacity.n_time * output_capacity.n_freq * output_capacity.n_beams);
+        } else {
+            device_int8_output = std::make_unique<DeviceBuffer<std::int8_t>>(
+                quantized_intensity_bytes(output_capacity));
+            host_int8_output = std::make_unique<PinnedBuffer<std::int8_t>>(
+                quantized_intensity_bytes(output_capacity));
+            device_parameters = std::make_unique<DeviceBuffer<Int8QuantizationParameters>>(
+                quantization_parameter_count(output_capacity));
+            host_parameters = std::make_unique<PinnedBuffer<Int8QuantizationParameters>>(
+                quantization_parameter_count(output_capacity));
+        }
+    }
 
     Dimensions capacity;
     CudaBeamformerKernel kernel;
     std::optional<TemporalIntegrationConfig> temporal_integration;
     CudaBeamformerOutput output;
+    Dimensions output_capacity;
     CudaBeamformerWorkspace workspace;
+
+    // Persistent buffers and stream for steady-state pinned execution
+    DeviceBuffer<std::uint8_t> device_voltage;
+    DeviceBuffer<ComplexFloat> device_weights;
+    PinnedBuffer<std::uint8_t> host_voltage;
+    PinnedBuffer<ComplexFloat> host_weights;
+    std::unique_ptr<DeviceBuffer<float>> device_float_output;
+    std::unique_ptr<PinnedBuffer<float>> host_float_output;
+    std::unique_ptr<DeviceBuffer<std::int8_t>> device_int8_output;
+    std::unique_ptr<PinnedBuffer<std::int8_t>> host_int8_output;
+    std::unique_ptr<DeviceBuffer<Int8QuantizationParameters>> device_parameters;
+    std::unique_ptr<PinnedBuffer<Int8QuantizationParameters>> host_parameters;
+    CudaStream stream;
+    CudaEvent start;
+    CudaEvent h2d_end;
+    CudaEvent compute_end;
+    CudaEvent quantization_end;
+    CudaEvent d2h_end;
 };
 
 CudaOfflineFrameRunner::CudaOfflineFrameRunner(
@@ -224,6 +347,102 @@ CudaOfflineFrameResult CudaOfflineFrameRunner::run(
     }
     const auto result_end = Clock::now();
     result.timings.device_to_host_ms = elapsed_ms(result_start, result_end);
+    return result;
+}
+
+void CudaOfflineFrameRunner::preload_weights(const Weights& weights, const Dimensions& dims) {
+    const std::size_t expected_weights = weight_count(dims, impl_->kernel);
+    if (weights.size() != expected_weights) {
+        throw std::invalid_argument("preload_weights size does not match selected layout");
+    }
+    impl_->host_weights.copy_from(weights, expected_weights);
+    check_cuda(cudaMemcpy(impl_->device_weights.data(), impl_->host_weights.data(),
+                          expected_weights * sizeof(ComplexFloat), cudaMemcpyHostToDevice),
+               "cudaMemcpy preload weights offline frame");
+}
+
+std::uint8_t* CudaOfflineFrameRunner::pinned_host_voltage_data() {
+    return impl_->host_voltage.data();
+}
+
+CudaOfflineFrameResult CudaOfflineFrameRunner::run_pinned(
+    const Dimensions& dims, const std::uint64_t frame_id, const ShardDescriptor& shard) {
+    validate_dimensions(dims);
+    validate_shard_descriptor(shard);
+    if (dims.n_freq != impl_->capacity.n_freq || dims.n_ant != impl_->capacity.n_ant
+        || dims.n_time > impl_->capacity.n_time || dims.n_beams > impl_->capacity.n_beams) {
+        throw std::invalid_argument("offline frame dimensions exceed runner capacity");
+    }
+
+    const std::size_t packed_count = packed_voltage_bytes(dims);
+    const Dimensions output_dims = output_dimensions(dims, impl_->temporal_integration);
+    CudaOfflineFrameResult result;
+    result.output_dims = output_dims;
+    result.timings.setup_ms = impl_->workspace.setup_ms();
+    if (impl_->output == CudaBeamformerOutput::Float32) {
+        result.float32_output.resize(output_dims.n_time * output_dims.n_freq * output_dims.n_beams);
+    } else {
+        result.quantized_output.codes.resize(quantized_intensity_bytes(output_dims));
+        result.quantized_output.parameters.resize(quantization_parameter_count(output_dims));
+    }
+
+    const auto stream = impl_->stream.get();
+    check_cuda(cudaEventRecord(impl_->start.get(), stream), "cudaEventRecord offline start");
+    check_cuda(cudaMemcpyAsync(impl_->device_voltage.data(), impl_->host_voltage.data(),
+                               packed_count, cudaMemcpyHostToDevice, stream),
+               "cudaMemcpyAsync offline voltage host to device");
+    check_cuda(cudaEventRecord(impl_->h2d_end.get(), stream), "cudaEventRecord offline H2D end");
+
+    if (impl_->temporal_integration) {
+        launch_packed_integrated_beamformer(
+            impl_->kernel, stream, impl_->device_voltage.data(),
+            impl_->device_weights.data(),
+            impl_->device_float_output->data(),
+            dims, *impl_->temporal_integration);
+    } else {
+        launch_packed_beamformer(impl_->kernel, stream, impl_->device_voltage.data(),
+                                 impl_->device_weights.data(),
+                                 impl_->device_float_output->data(), dims);
+    }
+    check_cuda(cudaEventRecord(impl_->compute_end.get(), stream), "cudaEventRecord offline compute end");
+
+    if (impl_->output == CudaBeamformerOutput::QuantizedInt8) {
+        launch_quantize_integrated_intensity(
+            stream, impl_->device_float_output->data(), impl_->device_int8_output->data(),
+            impl_->device_parameters->data(), output_dims);
+        check_cuda(cudaEventRecord(impl_->quantization_end.get(), stream),
+                   "cudaEventRecord offline quantization end");
+        check_cuda(cudaMemcpyAsync(impl_->host_int8_output->data(),
+                                   impl_->device_int8_output->data(),
+                                   result.quantized_output.codes.size(),
+                                   cudaMemcpyDeviceToHost, stream),
+                   "cudaMemcpyAsync offline int8 output device to host");
+        check_cuda(cudaMemcpyAsync(impl_->host_parameters->data(),
+                                   impl_->device_parameters->data(),
+                                   result.quantized_output.parameters.size() * sizeof(Int8QuantizationParameters),
+                                   cudaMemcpyDeviceToHost, stream),
+                   "cudaMemcpyAsync offline parameters device to host");
+    } else {
+        check_cuda(cudaMemcpyAsync(impl_->host_float_output->data(),
+                                   impl_->device_float_output->data(),
+                                   result.float32_output.size() * sizeof(float),
+                                   cudaMemcpyDeviceToHost, stream),
+                   "cudaMemcpyAsync offline float output device to host");
+    }
+    check_cuda(cudaEventRecord(impl_->d2h_end.get(), stream), "cudaEventRecord offline D2H end");
+    check_cuda(cudaEventSynchronize(impl_->d2h_end.get()), "cudaEventSynchronize offline output");
+
+    result.timings.host_to_device_ms = event_elapsed_ms(impl_->start, impl_->h2d_end);
+    result.timings.kernel_ms = event_elapsed_ms(impl_->h2d_end, impl_->compute_end);
+    if (impl_->output == CudaBeamformerOutput::QuantizedInt8) {
+        result.timings.quantization_ms = event_elapsed_ms(impl_->compute_end, impl_->quantization_end);
+        result.timings.device_to_host_ms = event_elapsed_ms(impl_->quantization_end, impl_->d2h_end);
+        impl_->host_int8_output->copy_to(result.quantized_output.codes, result.quantized_output.codes.size());
+        impl_->host_parameters->copy_to(result.quantized_output.parameters, result.quantized_output.parameters.size());
+    } else {
+        result.timings.device_to_host_ms = event_elapsed_ms(impl_->compute_end, impl_->d2h_end);
+        impl_->host_float_output->copy_to(result.float32_output, result.float32_output.size());
+    }
     return result;
 }
 

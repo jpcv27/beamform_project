@@ -43,6 +43,18 @@ class CudaOfflineTwoShardRunner {
         const std::array<Weights, frequency_shard_count>& weights,
         const Dimensions& dims, std::uint64_t frame_id);
 
+    // Preload weights to device memory so steady-state timing keeps weights resident.
+    void preload_weights(const std::array<Weights, frequency_shard_count>& weights, const Dimensions& dims);
+
+    // Direct access to the pinned host voltage buffer for a shard (0 or 1).
+    std::uint8_t* pinned_host_voltage_data(std::size_t shard_id);
+
+    // Execute steady-state pipeline from pinned host voltage buffers with resident weights.
+    // Measures exact H2D, kernel, quantization, D2H, and synchronization.
+    CudaOfflineTwoShardResult run_pinned(
+        const Dimensions& dims, std::uint64_t frame_id,
+        const std::array<ShardDescriptor, frequency_shard_count>& descriptors);
+
   private:
     struct Impl;
     std::unique_ptr<Impl> impl_;

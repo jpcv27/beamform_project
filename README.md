@@ -484,3 +484,67 @@ sidecar paths for the local `(offset, scale)` parameters and metadata. The codes
 
 At `[48][336][64]`, the codes consume 1,032,192 bytes and the parameter sidecar consumes
 32,256 bytes, versus 4,128,768 bytes for integrated float32.
+
+## Production Cadence Benchmark (Ticket 9)
+
+The production cadence benchmark measures whether the complete packed-input CUDA pipeline
+sustains the Kotekan frame cadence for one shard and for two independent shards processed
+concurrently on a single GPU.
+
+### Cadence deadline
+
+At the primary production configuration:
+- `n_ant = 64`
+- `n_beams = 64`
+- `n_freq_local = 336` (per shard; two shards cover the full 672-channel band)
+- `n_time = 15360` (48 integrated windows with `integration_spectra = 320`)
+
+The physical data accumulation period is:
+`deadline_ms = 15360 * (10 / 3) us / 1000 = 51.2 ms`.
+
+To sustain real-time cadence in a streaming Kotekan pipeline, total end-to-end steady-state
+wall time (including pinned H2D, resident kernel execution, optional quantization, D2H, and
+synchronization) must be strictly $\le 51.2\text{ ms}$.
+
+### Benchmark tool and execution
+
+The dedicated CLI tool `benchmark_production_cadence` manages pinned host memory
+(`cudaMallocHost`) and resident weights:
+
+```bash
+# Verify configuration and allocations without execution
+./build/benchmark_production_cadence --dry-run
+
+# Run full production cadence benchmark (20 repetitions, 5 warmups)
+./build/benchmark_production_cadence \
+    --warmups 5 --repetitions 20 \
+    --output-prefix results/production_cadence_benchmark
+```
+
+Generated products:
+- `results/production_cadence_benchmark_timings.csv` (raw per-repetition timings)
+- `results/production_cadence_benchmark_summary.csv` (summary metrics table)
+- `results/production_cadence_benchmark_summary.json` (machine-readable hardware & statistics metadata)
+
+### Benchmark results on NVIDIA GeForce RTX 5090
+
+Hardware: NVIDIA GeForce RTX 5090 (sm_120, 170 SMs, 32 GB VRAM, PCIe 5.0), Driver 595.71.05, CUDA 13.3.
+Host: Intel Xeon w5-3525 CPU (16 cores, 32 threads, 512 GB RAM).
+
+| Pipeline | Output Mode | Kernel | Wall (ms) | Kernel (ms) | H2D (ms) | D2H (ms) | TFLOP/s | Margin (ms) | Cadence | Speedup |
+| :--- | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| One-Shard | Float32 | Tiled | 14.84 | 8.57 | 5.85 | 0.08 | 19.86 | +36.36 | **PASS** | 3.5x real-time |
+| One-Shard | Int8 | Tiled | 14.53 | 8.59 | 5.85 | 0.03 | 19.79 | +36.67 | **PASS** | 3.5x real-time |
+| Two-Shard | Float32 | Tiled | 23.16 | 11.37 | 11.68 | 0.08 | 29.93 | +28.04 | **PASS** | 2.2x real-time |
+| Two-Shard | Int8 | Tiled | 23.15 | 11.41 | 11.69 | 0.02 | 29.83 | +28.05 | **PASS** | 2.2x real-time |
+
+### Kernel comparison: Direct vs Tiled
+
+When evaluated with `--kernel direct`:
+- One-shard Direct: 109.54 ms wall (103.18 ms kernel) -> **FAIL** (-58.34 ms margin)
+- Two-shard Direct: 211.00 ms wall (199.20 ms kernel) -> **FAIL** (-159.80 ms margin)
+
+The `Tiled` kernel achieves a **12.0x kernel speedup** over the Direct baseline (8.57 ms vs
+103.18 ms), which is essential to sustaining the 51.2 ms Kotekan frame deadline for both
+single-shard and concurrent two-shard pipelines on a single GPU.
+
